@@ -1,0 +1,12 @@
+{
+  "name": "claude-sdd-tools",
+  "version": "1.0.0",
+  "description": "Spec-driven development toolkit — structured specification creation, implementation planning, and quality assurance through collaborative analysis",
+  "author": {
+    "name": "Nacho"
+  },
+  "homepage": "https://github.com/nachol/claude-sdd-tools",
+  "repository": "https://github.com/nachol/claude-sdd-tools",
+  "license": "MIT",
+  "keywords": ["spec-driven-development", "sdd", "specification", "planning", "code-review"]
+}
