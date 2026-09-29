@@ -4,7 +4,7 @@ A Claude Code plugin that implements a complete **Spec-Driven Development (SDD)*
 
 ## Overview
 
-This plugin provides 3 skills and 5 agents that work together as a structured pipeline. The workflow ensures that every piece of code originates from a well-defined specification, is implemented following a concrete plan, reviewed for correctness and security, tested with real code exercise, and documented before delivery.
+This plugin provides 3 interactive skills, 3 agentic (unattended) counterparts, and 5 agents that work together as a structured pipeline. The workflow ensures that every piece of code originates from a well-defined specification, is implemented following a concrete plan, reviewed for correctness and security, tested with real code exercise, and documented before delivery.
 
 The toolkit is **polyglot**: skills and agents adapt to the project's language and tooling (Go, Java/Kotlin, TypeScript/JavaScript, Python, and others). The review checklist includes language-specific extensions for the bug classes idiomatic to each stack.
 
@@ -47,6 +47,9 @@ claude plugin install claude-sdd-tools@<your-marketplace>
 | [spec-input-check](#spec-input-check) | `/spec-input-check <path>` | Validate input documents before specification |
 | [spec](#spec) | `/spec <idea>` | Transform ideas into implementable specifications |
 | [implement](#implement) | `/implement <plan-folder>` | Execute implementation plans step by step |
+| [agentic-spec-input-check](#agentic-skills) | Agents, or `/agentic-spec-input-check <path>` | Unattended input validation with a machine-readable verdict |
+| [agentic-spec](#agentic-skills) | Agents, or `/agentic-spec <idea>` | Unattended specification — decisions reviewed by the advisor |
+| [agentic-implement](#agentic-skills) | Agents, or `/agentic-implement <plan-folder>` | Unattended plan execution — blockers resolved with the advisor |
 
 ### Agents
 
@@ -371,6 +374,44 @@ Findings that fail this gate are removed entirely — not downgraded.
 
 ---
 
+## Agentic Skills
+
+`spec` and `spec-input-check` are **user-invoked only** (`disable-model-invocation: true`): they depend on a human answering questions, so agents cannot trigger them. The `agentic-*` skills run the same process **unattended**, so an agent — a subagent, a workflow, or a headless `claude -p` session — can invoke them directly through the Skill tool.
+
+The difference is **who answers the questions**. Where the interactive skill asks the user, the agentic skill writes a *Decision Brief* (or *Escalation Brief*) into the transcript — the question, the evidence, the options with trade-offs, and its recommendation — and consults the [advisor](https://code.claude.com/docs/en/advisor), a stronger reviewer model that reads the full transcript. Every decision is recorded in a log with its source:
+
+| Source | Meaning |
+|--------|---------|
+| `from-input` | Stated explicitly in the input and not challenged by the analysis |
+| `from-evidence` | Settled by the codebase, docs, or web research, with no real alternative |
+| `advisor-reviewed` | Resolved with an advisor response |
+| `self-decided` | The advisor was unavailable, declined, or not configured — the skill's own recommendation was used |
+
+The skills **never block on the advisor**. If it is not configured or not reachable, they keep going with their own recommendations, mark those decisions `self-decided`, and report them so a human can review them afterwards.
+
+| Interactive | Agentic | What changes |
+|-------------|---------|--------------|
+| `spec` | `agentic-spec` | Phase questions and gates are resolved by batched Decision Briefs reviewed by the advisor (one per phase gate, one per key design decision, one final spec review). Unknowns only the requester could answer become labeled assumptions listed under *Open Questions for the Requester*. Output location and follow-up (`--out`, `--then none\|plan\|implement`) come from arguments instead of questions. The spec includes the Decision Log as an appendix. |
+| `implement` | `agentic-implement` | Starts without asking. Step failures, agent failures, and circular fixes are escalated to the advisor instead of the user, with a conservative default when the advisor is unavailable. Deviations from the plan are recorded. Never commits. |
+| `spec-input-check` | `agentic-spec-input-check` | Reads the checklist from `spec-input-check` (single source of truth), has the advisor review the verdict, writes the report next to the document, and returns a recommended next action (`run-agentic-spec` or `fix-document-first`). |
+
+Each agentic skill ends its response with a **Result block** (`Status: COMPLETE | COMPLETE_WITH_ASSUMPTIONS | ... | BLOCKED`, paths, counts) that the invoking agent can parse.
+
+### Requirements
+
+- **Advisor configured** for advisor-reviewed decisions: run `/advisor <model>`, set `advisorModel` in settings, or start with `claude --advisor <model>`. Subagents inherit the configured advisor.
+- The advisor is a server-side tool of the Anthropic API. Through an LLM gateway (`ANTHROPIC_BASE_URL`) it works only if the gateway forwards it; otherwise every decision is `self-decided`.
+
+### Example
+
+```bash
+# Headless: check the brief, then spec + plan + implement it without a human in the loop
+claude -p --advisor opus "Use the claude-sdd-tools:agentic-spec-input-check skill on ./product-brief.md. \
+If it recommends run-agentic-spec, use claude-sdd-tools:agentic-spec with ./product-brief.md --then implement."
+```
+
+---
+
 ## End-to-End Example
 
 ```
@@ -405,8 +446,14 @@ claude-sdd-tools/
 │   │   └── SKILL.md           # Specification skill
 │   ├── spec-input-check/
 │   │   └── SKILL.md           # Input validation skill
-│   └── spec-implement/
-│       └── SKILL.md           # Implementation skill
+│   ├── spec-implement/
+│   │   └── SKILL.md           # Implementation skill
+│   ├── agentic-spec/
+│   │   └── SKILL.md           # Unattended specification skill
+│   ├── agentic-spec-input-check/
+│   │   └── SKILL.md           # Unattended input validation skill
+│   └── agentic-implement/
+│       └── SKILL.md           # Unattended implementation skill
 ├── agents/
 │   ├── plan-agent.md          # Planning agent
 │   ├── implement-agent.md     # Step implementation agent
