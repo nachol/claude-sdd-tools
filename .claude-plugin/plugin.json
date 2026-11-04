@@ -1,7 +1,7 @@
 {
   "name": "claude-sdd-tools",
   "version": "1.2.0",
-  "description": "Spec-driven and outcome-driven development toolkit \u2014 specification, outcome mapping, just-in-time planning, defensive programming baseline, quality gates, and an unattended backlog loop",
+  "description": "Spec-driven and outcome-driven development toolkit — specification, outcome mapping, just-in-time planning, defensive programming baseline, quality gates, and an unattended backlog loop",
   "author": {
     "name": "Nacho"
   },
