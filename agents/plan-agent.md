@@ -132,7 +132,8 @@ Every step MUST contain these sections:
 
 <Code block with the exact types, interfaces, function signatures, and constants to define.
 Include struct fields, method signatures, and exported symbols.
-This is the contract — the implementor fills in the bodies.>
+This is the contract — the implementor fills in the bodies.
+Every exposed symbol carries its Defensive contract (Validates / Fails with / Invariants).>
 
 **Implementation Notes:**
 - <Specific algorithmic or behavioral details>
@@ -150,6 +151,7 @@ This is the contract — the implementor fills in the bodies.>
 - Include ALL method signatures with parameter and return types
 - Include constants and type aliases
 - Include doc comments for exported symbols
+- For every exposed symbol (exported API, handler, public config, persisted/wire format), include its **Defensive contract** — `Validates`, `Fails with`, `Invariants` — in the exact format defined in `${CLAUDE_PLUGIN_ROOT}/references/defensive-programming.md` (section *Defensive contract*). Read that file before writing the first step. A step that exposes a symbol without its Defensive contract is incomplete. Internal symbols that only receive validated values declare `Validates: none — internal, inputs validated by <caller>` instead of re-validating (see *Anti-paranoia* in the same file).
 - This section is the implementor's primary reference — be precise
 
 ### Guidelines for Implementation Notes

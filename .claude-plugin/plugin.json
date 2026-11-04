@@ -1,12 +1,23 @@
 {
   "name": "claude-sdd-tools",
-  "version": "1.1.0",
-  "description": "Spec-driven development toolkit — structured specification creation, implementation planning, and quality assurance through collaborative analysis",
+  "version": "1.2.0",
+  "description": "Spec-driven and outcome-driven development toolkit \u2014 specification, outcome mapping, just-in-time planning, defensive programming baseline, quality gates, and an unattended backlog loop",
   "author": {
     "name": "Nacho"
   },
   "homepage": "https://github.com/nachol/claude-sdd-tools",
   "repository": "https://github.com/nachol/claude-sdd-tools",
   "license": "MIT",
-  "keywords": ["spec-driven-development", "sdd", "specification", "planning", "code-review"]
+  "keywords": [
+    "spec-driven-development",
+    "sdd",
+    "specification",
+    "planning",
+    "code-review",
+    "outcome-driven-development",
+    "odd",
+    "defensive-programming",
+    "backlog",
+    "loop"
+  ]
 }

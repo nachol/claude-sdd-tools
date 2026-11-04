@@ -71,6 +71,21 @@ These constraints apply to ALL test management activities without exception:
 4. **Performance Optimization**: Optimize slow tests while maintaining validation
 5. **Maintainability Improvement**: Enhance test structure and readability
 
+### Acceptance-first Mode (red phase):
+
+Used by the ODD skills (`odd-deliver`, `agentic-odd-deliver`) before implementation. This mode applies **only when the invoker explicitly requests "Acceptance-first mode"**; otherwise the normal workflows above apply.
+
+1. **Input**: an outcome card's Acceptance Criteria table (each criterion with the test path and name to create) and its Contract section.
+2. **Write tests from the criteria only**: one or more acceptance tests per criterion, at the path and with the name the card specifies, exercising the behavior through the public entry point the Contract defines. Assert the observable result stated in the criterion — including declared errors for failure-path criteria.
+3. **Do NOT modify production code.** The behavior does not exist yet; that is the point.
+4. **Compilation stubs**: only when the language requires symbols to exist for the tests to compile, and only for signatures the card's Contract defines, you MAY add minimal stubs that do not implement behavior (e.g., return a zero value, `throw new Error("not implemented")`, `panic("not implemented")`, `raise NotImplementedError`). List every stub in your report.
+5. **Run the acceptance tests. They are EXPECTED to fail.** For each test, classify the failure:
+   - **Right reason** — the assertion fails or the stub's not-implemented error surfaces because the behavior is missing.
+   - **Wrong reason** — compile error, missing fixture, broken setup, wrong import, typo in the test. Fix these (in test code or stubs only) and re-run until every test fails for the right reason.
+   - **Unexpected pass** — the test passes before implementation. Report it: either the behavior already exists or the test does not actually verify the criterion. Strengthen the test if it is the latter.
+6. **The "continue until 100% test pass rate" rule does NOT apply in this mode.** Do not try to make these tests pass. All other Universal Quality Constraints (no simplified tests, mock minimization) still apply.
+7. **Report**: a table `Criterion | Test (path › name) | Result | Failure reason | Right reason? (yes/no)`, the list of stubs added, and the exact command used to run the acceptance tests. Make clear which tests are unexpected passes.
+
 ## Implementation Standards:
 
 **Coverage Requirements:**

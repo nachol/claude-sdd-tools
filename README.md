@@ -1,10 +1,15 @@
 # claude-sdd-tools
 
-A Claude Code plugin that implements a complete **Spec-Driven Development (SDD)** workflow — from problem definition through specification, planning, implementation, review, testing, and documentation.
+A Claude Code plugin that implements two delivery workflows that share the same quality bar:
+
+- **Spec-Driven Development (SDD)** — from problem definition through a complete specification, a full implementation plan, implementation, review, testing, and documentation. Best when a contract must be closed whole before use.
+- **Outcome-Driven Development (ODD)** — the goal is framed once as an outcome map, then delivered as small vertical slices (outcomes), each planned just-in-time and closed completely (acceptance tests red → green, scoped review, docs) before the next one starts. Best when work can ship and be validated incrementally.
+
+Both workflows share a [defensive programming baseline](references/defensive-programming.md), and an unattended [backlog loop](#backlog-loop) can triage each backlog item to SDD or ODD and deliver it as pull requests behind an independent quality gate.
 
 ## Overview
 
-This plugin provides 3 interactive skills, 3 agentic (unattended) counterparts, and 5 agents that work together as a structured pipeline. The workflow ensures that every piece of code originates from a well-defined specification, is implemented following a concrete plan, reviewed for correctness and security, tested with real code exercise, and documented before delivery.
+This plugin provides 5 interactive skills, 5 agentic (unattended) counterparts, an unattended backlog loop, and 8 agents. The SDD pipeline is shown below; the ODD workflow is described in [ODD Workflow](#odd-workflow-outcome-driven-development). Both ensure that every piece of code originates from a well-defined specification (a full spec, or an outcome card), is implemented following a concrete plan, reviewed for correctness and security, tested with real code exercise, and documented before delivery.
 
 The toolkit is **polyglot**: skills and agents adapt to the project's language and tooling (Go, Java/Kotlin, TypeScript/JavaScript, Python, and others). The review checklist includes language-specific extensions for the bug classes idiomatic to each stack.
 
@@ -50,6 +55,11 @@ claude plugin install claude-sdd-tools@<your-marketplace>
 | [agentic-spec-input-check](#agentic-skills) | Agents, or `/agentic-spec-input-check <path>` | Unattended input validation with a machine-readable verdict |
 | [agentic-spec](#agentic-skills) | Agents, or `/agentic-spec <idea>` | Unattended specification — decisions reviewed by the advisor |
 | [agentic-implement](#agentic-skills) | Agents, or `/agentic-implement <plan-folder>` | Unattended plan execution — blockers resolved with the advisor |
+| [odd-map](#odd-map) | `/odd-map <idea \| doc \| map.md>` | Frame a goal and slice it into an ordered outcome backlog (or refine an existing map) |
+| [odd-deliver](#odd-deliver) | `/odd-deliver <map.md> [O-id]` | Deliver one outcome end to end: card → red → implement → green → review → docs → close |
+| [agentic-odd-map](#agentic-skills) | Agents, or `/agentic-odd-map <idea> [--then ...]` | Unattended outcome mapping — decisions reviewed by the advisor |
+| [agentic-odd-deliver](#agentic-skills) | Agents, or `/agentic-odd-deliver <map.md> [--next \| --all]` | Unattended outcome delivery |
+| [agentic-backlog](#backlog-loop) | `/loop /agentic-backlog [...]` | Consume a backlog: triage SDD/ODD, deliver, quality-gate, open PRs |
 
 ### Agents
 
@@ -59,7 +69,10 @@ claude plugin install claude-sdd-tools@<your-marketplace>
 | [implement-agent](#implement-agent) | `/implement` (per step) | Implement one plan step faithfully |
 | [review-agent](#review-agent) | `/implement` (post-steps) | Code review for correctness and security |
 | [test-agent](#test-agent) | `/implement` (per step) | Create and validate tests |
-| [docs-agent](#docs-agent) | `/implement` (post-steps) | Generate and update documentation |
+| [docs-agent](#docs-agent) | `/implement`, `/odd-deliver` | Generate and update documentation |
+| [outcome-agent](#outcome-agent) | `/odd-deliver` (per outcome) | Write the just-in-time outcome card for one outcome |
+| [triage-agent](#backlog-loop) | `agentic-backlog` (per item) | Route a backlog item to SDD, ODD, SPLIT or NEEDS_INPUT |
+| [quality-gate-agent](#backlog-loop) | `agentic-backlog` (per unit) | Independent, read-only verification of a deliverable and its tests |
 
 ---
 
@@ -374,9 +387,116 @@ Findings that fail this gate are removed entirely — not downgraded.
 
 ---
 
+## ODD Workflow (Outcome-Driven Development)
+
+SDD is waterfall by design: it plans everything up front and validates everything at the end. That preserves quality but makes the cycle long, and problems surface late. ODD keeps the same rigor but moves it to where it is cheap:
+
+```
+┌──────────┐    ┌───────────────────────── per outcome ──────────────────────────────────────┐
+│ odd-map  │───→│ outcome-agent → test-agent (red) → implement-agent → test-agent (green)     │
+│ (framing,│    │      (card)      (acceptance)        (steps)           (unit + acceptance) │
+│  runway, │    │   → review-agent (this outcome's diff) → docs-agent → close (update map)   │
+│ slicing) │    └────────────────────────────────────────────┬───────────────────────────────┘
+└──────────┘                     ▲                           │
+                                 └──── next outcome ─────────┘
+```
+
+| SDD guarantee | Where it lives in ODD |
+|---------------|-----------------------|
+| Problem framing rigor (assumptions, contradictions, constraints, glossary, NFRs) | `odd-map` Phase 1, once per goal |
+| Critical evaluation of design decisions | Architecture runway (expensive-to-reverse decisions, up front) + just-in-time decisions in each card |
+| Verifiable success criteria | North-star outcome in the map; executable acceptance criteria per card, written and run red before code |
+| Exact contracts for implementors | Card Contract + Steps in the plan-agent Step Format |
+| Testing | `test-agent` red + green per outcome |
+| Review for correctness and security | `review-agent` per outcome (instead of once at the end) |
+| Docs in sync | `docs-agent` per outcome |
+| Defensive programming | Shared baseline enforced in contract, acceptance, implementation and review |
+
+### When to use SDD vs ODD
+
+- **SDD** — a contract that must be closed whole before use (library public API, protocol, wire/persisted format, schema migration), or partial delivery has no value or is risky.
+- **ODD** — features that can ship and be validated incrementally, uncertainty about later parts, or early feedback is valuable.
+
+The [triage-agent](#backlog-loop) applies these criteria mechanically when the backlog loop picks an item.
+
+### Artifacts
+
+```
+odd/<slug>/
+  map.md                 # living outcome map
+  outcomes/
+    O-01-<name>.md       # outcome card, written just-in-time; Delivery Record appended at close
+```
+
+#### odd-map
+
+**What it does:** Frames a goal with the rigor of `/spec` Phase 1 (assumptions, contradiction scan, input classification, hard/soft constraints, measurable north-star, glossary, NFR thresholds), decides only the **architecture runway** (decisions that are expensive to reverse), and slices the goal into an ordered backlog of vertical outcomes. O-01 is always a **walking skeleton** — the thinnest end-to-end path. With an existing `map.md` it runs in **refine** mode: reads the learnings and proposes re-prioritization, splits, drops and new outcomes.
+
+```
+/odd-map Per-tenant rate limiting for the public API
+/odd-map ./odd/per-tenant-rate-limiting/map.md     # refine
+```
+
+#### odd-deliver
+
+**What it does:** Delivers one outcome (default: the first `pending` outcome whose dependencies are delivered) and closes it completely:
+
+1. `outcome-agent` writes the outcome card — **Gate 1:** you approve it
+2. `test-agent` (acceptance-first mode) writes the acceptance tests; they must fail for the right reason
+3. `implement-agent` implements the card's steps
+4. `test-agent` adds unit tests and drives everything green
+5. `review-agent` reviews this outcome's diff only
+6. `docs-agent` updates documentation
+7. Close: acceptance re-run, Delivery Record, map updated with learnings — **Gate 2:** you approve backlog changes
+
+Never commits; it suggests one commit per outcome.
+
+```
+/odd-deliver ./odd/per-tenant-rate-limiting/map.md
+/odd-deliver ./odd/per-tenant-rate-limiting/map.md O-03
+```
+
+#### outcome-agent
+
+**What it does:** Writes exactly one outcome card from the map: outcome statement, 1–7 Given/When/Then acceptance criteria (at least one failure path), scope, just-in-time decisions, contract in code with its defensive contract, and 1–5 steps in the plan-agent Step Format. If the outcome needs more than 5 steps or 7 criteria, it does not write the card — it proposes a split. It never implements, writes tests, or plans other outcomes.
+
+---
+
+## Defensive Programming Baseline
+
+[`references/defensive-programming.md`](references/defensive-programming.md) is the single, polyglot source of truth shared by SDD and ODD: validate at trust boundaries, fail fast on violated preconditions, explicit error model, no swallowed errors, bounded everything, safe defaults, resource safety, immutability at boundaries, no secrets in errors/logs, assertions are not validation.
+
+It is enforced at four points: the **contract** (`plan-agent` steps and `outcome-agent` cards declare what each exposed symbol validates, how it fails and which invariants it keeps), **acceptance** (every outcome has at least one failure-path criterion), **implementation** (`implement-agent` treats it as a convention), and **review** (`review-agent` feeds the rules into its Robustness and Security passes).
+
+---
+
+## Backlog Loop
+
+`agentic-backlog` consumes a backlog unattended. Each invocation (tick) does **one unit of work** — a whole SDD item, or one ODD outcome — persists state, and exits; under `/loop` it paces itself.
+
+```
+/loop /agentic-backlog                                  # backlog.md at repo root
+/loop /agentic-backlog --source github:agent-ready      # GitHub Issues with a label
+/loop /agentic-backlog --auto-merge --max-blocked 3
+```
+
+Per tick:
+
+1. Service open PRs (CI status; merge only with `--auto-merge` and green CI).
+2. Continue an ODD item whose previous outcome PR is merged.
+3. Otherwise take the next ready item → `triage-agent` → **SDD** (`agentic-spec --then plan` + `agentic-implement`) or **ODD** (`agentic-odd-map`, then `agentic-odd-deliver --next` per outcome), **SPLIT** into child items, or **NEEDS_INPUT** with concrete questions.
+4. **Quality gate** before any push or PR: Result block validation → fresh build + lint + full test suite → local commit → `quality-gate-agent` on the committed diff (traceability of criteria to tests, test quality, defensive baseline, contract fidelity) → PR CI.
+5. On failure: one fix pass, then the item is `blocked` with a report and a draft PR. After `--max-blocked` consecutive blocks (default 3) the loop stops.
+
+**Backlog sources:** a human-authored `backlog.md` (see [`templates/backlog.md`](templates/backlog.md)) with loop state kept in a local `.agentic-backlog/` directory (excluded through `.git/info/exclude`, never `.gitignore`), or GitHub Issues with state as labels and comments (requires an authenticated `gh`).
+
+> ⚠️ **Git policy exception.** Every other skill in this plugin never commits. `agentic-backlog` is the only one that does: one branch per unit (`agent/<id>` or `agent/<id>-O-NN`), a local commit once the build and tests pass, then a pushed branch and a PR only after the full quality gate passes. It never pushes to the default branch, never force-pushes, and **merges only when you pass `--auto-merge` and CI is green**. Without `--auto-merge`, every PR waits for a human. It requires a clean working tree and never stashes or discards your changes.
+
+---
+
 ## Agentic Skills
 
-`spec` and `spec-input-check` are **user-invoked only** (`disable-model-invocation: true`): they depend on a human answering questions, so agents cannot trigger them. The `agentic-*` skills run the same process **unattended**, so an agent — a subagent, a workflow, or a headless `claude -p` session — can invoke them directly through the Skill tool.
+`spec`, `spec-input-check`, `odd-map` and `odd-deliver` are **user-invoked only** (`disable-model-invocation: true`): they depend on a human answering questions, so agents cannot trigger them. The `agentic-*` skills run the same process **unattended**, so an agent — a subagent, a workflow, or a headless `claude -p` session — can invoke them directly through the Skill tool.
 
 The difference is **who answers the questions**. Where the interactive skill asks the user, the agentic skill writes a *Decision Brief* (or *Escalation Brief*) into the transcript — the question, the evidence, the options with trade-offs, and its recommendation — and consults the [advisor](https://code.claude.com/docs/en/advisor), a stronger reviewer model that reads the full transcript. Every decision is recorded in a log with its source:
 
@@ -393,6 +513,8 @@ The skills **never block on the advisor**. If it is not configured or not reacha
 |-------------|---------|--------------|
 | `spec` | `agentic-spec` | Phase questions and gates are resolved by batched Decision Briefs reviewed by the advisor (one per phase gate, one per key design decision, one final spec review). Unknowns only the requester could answer become labeled assumptions listed under *Open Questions for the Requester*. Output location and follow-up (`--out`, `--then none\|plan\|implement`) come from arguments instead of questions. The spec includes the Decision Log as an appendix. |
 | `implement` | `agentic-implement` | Starts without asking. Step failures, agent failures, and circular fixes are escalated to the advisor instead of the user, with a conservative default when the advisor is unavailable. Deviations from the plan are recorded. Never commits. |
+| `odd-map` | `agentic-odd-map` | Framing, runway and slicing gates are resolved by Decision Briefs reviewed by the advisor; requester-only unknowns become labeled assumptions under *Open Questions for the Requester* in the map. `--then none\|deliver-next\|deliver-all` (default `deliver-next`) chains into `agentic-odd-deliver`. |
+| `odd-deliver` | `agentic-odd-deliver` | Card approval, decisions, splits and backlog changes go through the advisor. Blockers and circular fixes follow `agentic-implement`. `--all` delivers outcomes in order, each fully closed, and stops at the first `BLOCKED` or `PARTIAL` outcome. Never commits. |
 | `spec-input-check` | `agentic-spec-input-check` | Reads the checklist from `spec-input-check` (single source of truth), has the advisor review the verdict, writes the report next to the document, and returns a recommended next action (`run-agentic-spec` or `fix-document-first`). |
 
 Each agentic skill ends its response with a **Result block** (`Status: COMPLETE | COMPLETE_WITH_ASSUMPTIONS | ... | BLOCKED`, paths, counts) that the invoking agent can parse.
@@ -452,14 +574,31 @@ claude-sdd-tools/
 │   │   └── SKILL.md           # Unattended specification skill
 │   ├── agentic-spec-input-check/
 │   │   └── SKILL.md           # Unattended input validation skill
-│   └── agentic-implement/
-│       └── SKILL.md           # Unattended implementation skill
+│   ├── agentic-implement/
+│   │   └── SKILL.md           # Unattended implementation skill
+│   ├── odd-map/
+│   │   └── SKILL.md           # Outcome mapping skill
+│   ├── odd-deliver/
+│   │   └── SKILL.md           # Outcome delivery skill
+│   ├── agentic-odd-map/
+│   │   └── SKILL.md           # Unattended outcome mapping skill
+│   ├── agentic-odd-deliver/
+│   │   └── SKILL.md           # Unattended outcome delivery skill
+│   └── agentic-backlog/
+│       └── SKILL.md           # Unattended backlog loop skill
 ├── agents/
 │   ├── plan-agent.md          # Planning agent
 │   ├── implement-agent.md     # Step implementation agent
 │   ├── review-agent.md        # Code review agent
 │   ├── test-agent.md          # Testing agent
-│   └── docs-agent.md          # Documentation agent
+│   ├── docs-agent.md          # Documentation agent
+│   ├── outcome-agent.md       # Outcome card agent
+│   ├── triage-agent.md        # SDD/ODD routing agent
+│   └── quality-gate-agent.md  # Independent quality verification agent
+├── references/
+│   └── defensive-programming.md  # Shared defensive programming baseline
+├── templates/
+│   └── backlog.md             # Example backlog file
 ├── LICENSE
 └── README.md
 ```

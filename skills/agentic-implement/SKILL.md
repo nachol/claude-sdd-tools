@@ -104,7 +104,7 @@ For each step in the plan, execute the following pipeline **in strict order**:
     - For parallel phases: execute independent tasks sequentially (one at a time), following the order presented in the plan file.
     - For sequential phases: follow the numbered order.
 - **If NO steps remain**: run the post-steps pipeline:
-    - Launch the `review-agent` agent to review ALL code produced in this execution.
+    - Launch the `review-agent` agent to review ALL code produced in this execution. Pass it the plan folder (the steps' Types/Signatures and their Defensive contracts) as the declared contract to check the code against.
         - Fix every finding immediately, including tests.
         - Re-verify the Done-when criteria after fixes.
         - If a fix requires changing a plan contract (type, signature, public behavior), consult first, then record the change as a **deviation** in the final report.

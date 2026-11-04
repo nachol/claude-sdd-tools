@@ -55,6 +55,7 @@ Each sub-agent prompt MUST include:
 6. Instruction to produce findings or an explicit **"PASS — [area] verified"** if no issues are found
 7. Instruction to **only perform research (read files, search code) — never write or edit code**
 8. The **language-specific extension items** for its assigned pass that match the language(s) of the code under review (from the Language-Specific Checklist Extensions section below). Identify the project's language(s) during Phase 1 and copy only the matching extension items into each sub-agent prompt, alongside the base checklist.
+9. For the **Pass 3** and **Pass 6** sub-agents only: the **Defensive Programming Baseline Extension** items for that pass (from the section below), together with the Defensive contracts declared in the plan step or outcome card for the code under review, when one exists.
 
 Wait for all 6 sub-agents to complete before proceeding.
 
@@ -257,6 +258,30 @@ Covered by the base checklists — the concurrency, resource, and error-wrapping
   - *Typical failure*: Callbacks registered in a loop all fire with the last iteration's value.
 - **P6 [Pass 3]** For files, sessions, connections, and executors: are they managed with context managers (`with`) or explicitly closed on all paths?
   - *Typical failure*: A `requests.Session` created per call is never closed; sockets exhaust under sustained load.
+
+---
+
+## Defensive Programming Baseline Extension
+
+The shared baseline lives in `${CLAUDE_PLUGIN_ROOT}/references/defensive-programming.md` (rules DP1–DP10). Read it during Phase 1. Its items extend existing passes — **there is no extra pass**. Copy the items tagged for a pass into that pass's sub-agent prompt, together with the baseline's *Anti-paranoia* section and the per-language note of each rule that matches the language(s) under review. Extension findings use the item ID as the finding number (e.g. `3-DP5`). Where an item overlaps a base checklist item, the base item is authoritative and the extension only adds what it does not cover — report the finding once, under the base item number.
+
+If the plan step or outcome card declares a **Defensive contract** (Validates / Fails with / Invariants) for a reviewed symbol, check the code against it: a declared validation, error or invariant that the code does not implement is a finding.
+
+**Pass 3 (Robustness):**
+- **DP2** Violated preconditions/invariants fail fast at the point of violation (constructors reject invalid config; impossible states raise instead of silently defaulting).
+- **DP3** Every failure mode of an exposed operation is a declared, distinguishable error; causes preserved. *Overlaps items 12 (unwrapping) and 30 (leaked internal types) — add only what they miss: undeclared failure modes vs. the Defensive contract.*
+- **DP4** No swallowed errors. *Overlaps item 9 — add only empty catch blocks, catch-all without handling, and floating promises not covered by N1.*
+- **DP5** External calls have timeouts; retries bounded with backoff; queues, buffers, payload sizes, collection growth and recursion bounded.
+- **DP7** Every acquired resource is released on every exit path, including errors. *Overlaps item 11 and J7/P6 — add only resources they do not name (locks, goroutines/threads, subscriptions, timers).*
+- **DP8** Inputs not mutated unless the contract says so; returned internals are copies or read-only views.
+- **DP10** Debug-only assertions (`assert`, `console.assert`) are not used as input validation or error handling.
+
+**Pass 6 (Security):**
+- **DP1** Inputs crossing a trust boundary are validated for presence, type, range, length and format. *Overlaps item 27 and N6 — item 27 is authoritative; add only boundaries it does not name (files, environment, configuration, responses from external services).*
+- **DP6** Defaults are the safe choice; unknown enum values and unexpected states are rejected, not passed through. *Overlaps item 31 for TLS — add only non-crypto defaults (authorization fallthrough, permissive `default:` branches, unknown enum handling).*
+- **DP9** No secrets or PII in error messages or logs. *Overlaps item 24 — item 24 is authoritative; add only secrets carried inside error messages and `toString()`/`repr` of credential types.*
+
+Baseline findings go through the Final Gate like any other: per the baseline's *Anti-paranoia* section, a missing check is a finding only when you can name a concrete input or state, reachable from a trust boundary, that produces wrong behavior. Absence of re-validation between internal components that receive validated values is never a finding.
 
 ---
 
