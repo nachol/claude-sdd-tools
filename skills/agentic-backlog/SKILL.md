@@ -43,9 +43,9 @@ Record every consultation in the item's report.
 Every other skill in this plugin **never commits**. This skill is the explicit, scoped exception, because an unattended loop that leaves N items uncommitted in one working tree is unusable. The exception applies **only to `agentic-backlog`**; the delivery skills it invokes keep their own "never commit" rule — the loop does the commit.
 
 Allowed:
-- Create one branch per unit from the up-to-date default branch: `agent/<id>` (SDD item), `agent/<id>-O-NN` (ODD outcome), or `agent/<id>-refine` (map-only refine, see [Step 2](#step-2--continue-an-odd-item)). ODD units start on a working branch `agent/<id>-next` and are renamed (`git branch -m`, before any push) to `agent/<id>-O-NN` once the delivered outcome ID is known from the Result.
-- Commit **locally** on that branch after quality-gate steps 1–2 pass — the local commit is what quality-gate-agent (step 3) diffs. Fix passes add **new commits** on the same branch. A unit that ends `blocked` gets a `wip` commit.
-- Push **that branch** (`git push -u origin <branch>`) and open a PR with `gh pr create` **only after quality-gate step 3 passes** (or as a draft PR when the unit ends `blocked`).
+- Create one branch per unit from the up-to-date default branch: `agent/<id>` (SDD item), `agent/<id>-O-NN` (ODD outcome), or `agent/<id>-refine-<n>` (map-only refine, see [Step 2](#step-2--continue-an-odd-item)). ODD units start on a working branch `agent/<id>-next-<n>` and are renamed (`git branch -m`, before any push) to `agent/<id>-O-NN` once the delivered outcome ID is known from the Result. `<n>` is the next free integer (starting at 1) such that the branch name exists neither locally (`git branch --list`) nor on the remote (`git ls-remote --heads origin`); this keeps working branches unique when a unit is blocked or refined more than once.
+- Commit **locally** on that branch after quality-gate steps 1–2 pass — the local commit is what quality-gate-agent (step 3) diffs. Fix passes add **new commits** on the same branch only when the unit is already committed; if a fix pass runs before the unit's first commit (gate step 1 or 2 failed), it does not commit — the normal local commit happens once steps 1–2 pass. A unit that ends `blocked` gets a `wip` commit.
+- Push **that branch** (`git push -u origin <branch>`) and open a PR with `gh pr create` **only after quality-gate step 3 passes** (or as a draft PR when the unit ends `blocked`). **Named exception:** the map-only refine PR of [Step 2](#step-2--continue-an-odd-item) item 3 — no delivery Result and no code, so gate steps 1–3 are not applicable; it is pushed after its local commit.
 - Merge a PR **only** when `--auto-merge` was given **and** its CI is green **and** its gate passed.
 
 Forbidden, always:
@@ -67,7 +67,7 @@ The tick algorithm talks to the backlog only through this contract, so it is sou
 | `append_report(id, text)` | Append to the item's report (triage, gate results, consultations, PR links) |
 | `create_children(parent_id, children)` | Record SPLIT children as new eligible items |
 
-Loop-managed fields per item: `status` (`ready | triaged | in-progress | in-review | done | blocked | needs-input | split`), `method` (`SDD | ODD`), `artifacts` (spec + plan path, or map path), `outcome` (current ODD outcome ID), `branch`, `pr`, `attempts`, `report`, `triage` (the Triage Result block), `refine_pending` (ODD only: the refine recommendations to apply before the next outcome, or empty). Also keep, globally: `consecutive_blocked` (for the circuit breaker).
+Loop-managed fields per item: `status` (`ready | triaged | in-progress | in-review | done | blocked | needs-input | split`), `method` (`SDD | ODD`), `artifacts` (spec + plan path, or map path), `outcome` (current ODD outcome ID), `branch`, `pr`, `attempts`, `report`, `triage` (the Triage Result block), `refine_pending` (ODD only: the refine recommendations to apply before the next outcome, or empty), `block_kind` (set when blocked: `code-test` | `refine` | `artifact` — see [Failure handling](#failure-handling)), `guidance` (written by the human when unblocking: free text the loop passes to the resumed unit). Also keep, globally: `consecutive_blocked` (for the circuit breaker).
 
 ### File source
 
@@ -83,6 +83,7 @@ Loop-managed fields per item: `status` (`ready | triaged | in-progress | in-revi
       "<id>": {
         "status": "in-review", "method": "ODD", "artifacts": "odd/<slug>/map.md",
         "outcome": "O-02", "branch": "agent/<id>-O-02", "pr": "https://...",
+        "block_kind": null, "guidance": null, "refine_pending": "",
         "attempts": 0, "report": ".agentic-backlog/reports/<id>.md",
         "triage": "<Triage Result block>"
       }
@@ -92,15 +93,16 @@ Loop-managed fields per item: `status` (`ready | triaged | in-progress | in-revi
   ```
 
 - **Eligible (new):** `status: ready` (or missing) in the backlog file **and** no state entry, plus SPLIT children recorded in `children` without a state entry.
-- **Unblock:** a human unblocks a `blocked` item by setting its state `status` to `ready`, keeping `method`, `artifacts`, `outcome` and `branch`. The loop then **resumes** it on its existing branch ([Step 1b](#step-1b--resume-unblocked-items)) — it never re-triages it or re-creates its spec, plan or map. Deleting the state entry does not restart an item: its `agent/<id>*` branches trigger [Reconstruction](#file-source) back to `blocked`. To restart an item from scratch, delete its `agent/<id>*` branches (local and remote) **and** its state entry.
-- **Reconstruction:** if `state.json` is missing, or an item has no state entry, but branches `agent/<id>*` exist locally or on the remote, rebuild that state before doing anything else: for each such branch, find its PR with `gh pr list --head <branch> --state all --json number,state,isDraft,url`; merged → `done` for SDD / the outcome delivered for ODD, open draft → `blocked`, open → `in-review`, no PR → `blocked` with reason "reconstructed: branch without PR". Record the reconstruction in each affected report.
+- **Unblock:** a human unblocks a `blocked` item by setting its state `status` to `ready`, keeping `method`, `artifacts`, `outcome` and `branch`, and optionally writing `guidance` (free text: what to change, answers to the blocking questions). The loop then **resumes** it on its existing branch ([Step 1b](#step-1b--resume-unblocked-items)) — it never re-triages it or re-creates its spec, plan or map. Deleting the state entry does not restart an item: its `agent/<id>*` branches trigger [Reconstruction](#file-source) back to `blocked`. To restart an item from scratch, delete its `agent/<id>*` branches (local and remote) **and** its state entry.
+- **Resume from `needs-input`:** ODD item with a map (Step 2 found no eligible outcome) → the human fixes the map or writes `guidance` and sets state `status: ready`; the loop clears `branch` and sets `status: triaged`, so Step 2 picks it up (with `guidance` as refine input). Triage `NEEDS_INPUT` (no map, no branch) → the human updates the item in `backlog.md` and **deletes its state entry**; the item is re-triaged from scratch (intended — the input changed).
+- **Reconstruction:** if `state.json` is missing, or an item has no state entry, but branches `agent/<id>*` exist locally or on the remote, rebuild that state before doing anything else: for each such branch, find its PR with `gh pr list --head <branch> --state all --json number,state,isDraft,url`; merged → `done` for SDD / for ODD, the outcome delivered as read from the merged PR's title or body (`O-NN`; working-branch names `-next-<n>`/`-refine-<n>` do not carry it), then advanced as in Step 1, open draft → `blocked`, open → `in-review`, no PR → `blocked` with reason "reconstructed: branch without PR". Record the reconstruction in each affected report.
 
 ### GitHub source
 
 - Items are open issues with the given label (default `agent-ready`), oldest first. Title = issue title; description = issue body; links = URLs in the body.
 - State lives in GitHub, not in `state.json`: status is mirrored as labels `agent:triaged | agent:in-progress | agent:in-review | agent:done | agent:blocked | agent:needs-input | agent:split | agent:unblocked` (create missing labels with `gh label create`). Exactly one `agent:*` status label is on an item at any time; replace it on every transition. Other loop-managed fields live in a hidden JSON block `<!-- agentic-backlog-state {...} -->` inside the latest loop comment on the issue; triage results, gate reports, consultations and PR links are posted as issue comments.
 - Eligible (new): labeled with the source label and carrying no `agent:*` status label. Items labeled `agent:triaged` are ODD items between outcomes (handled by Step 2, never by Step 3).
-- Unblock: a human replaces `agent:blocked` with `agent:unblocked`; the loop resumes it on its existing branch ([Step 1b](#step-1b--resume-unblocked-items)), like state `status: ready` for the file source.
+- Unblock: a human replaces `agent:blocked` with `agent:unblocked`, optionally adding guidance as an issue comment; the loop resumes it on its existing branch ([Step 1b](#step-1b--resume-unblocked-items)), like state `status: ready` for the file source. Resume from `needs-input`: ODD item with a map → replace `agent:needs-input` with `agent:triaged` (guidance in a comment); triage `NEEDS_INPUT` → edit the issue and remove the `agent:*` label to re-triage.
 - SPLIT: create child issues with the source label, each body linking the parent (child IDs are the new issue numbers); comment on the parent with the children and add `agent:split`.
 - `consecutive_blocked` is kept in `.agentic-backlog/state.json` (local).
 - If `gh auth status` fails, end the tick immediately with status `ERROR` and no side effects.
@@ -122,25 +124,31 @@ Check in order; on failure, stop the loop (`ScheduleWakeup` with `stop: true` wh
 
 For each item `in-review` (oldest first), read CI with `gh pr checks <pr>` and the PR state with `gh pr view <pr> --json state,mergedAt,isDraft`:
 
-- **Already merged** (a human merged it) → advance the item. Reset `consecutive_blocked` to 0. Continue checking the next `in-review` item — detecting merges is bookkeeping, not a unit of work.
-- **CI green + `--auto-merge`** → merge with an **explicit** method flag (unattended `gh pr merge` refuses to run without one): read `gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed` and use the first allowed of `--merge`, `--squash`, `--rebase` (`gh pr merge <pr> --merge|--squash|--rebase`). Then advance the item. **This is the tick's unit.**
+- **Already merged** (a human merged it) → `git fetch` + `git merge --ff-only` on the default branch if not already done this tick, then advance the item. Reset `consecutive_blocked` to 0. Continue checking the next `in-review` item — detecting merges is bookkeeping, not a unit of work.
+- **CI green + `--auto-merge`** → merge with an **explicit** method flag (unattended `gh pr merge` refuses to run without one): read `gh repo view --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed` and use the first allowed of `--merge`, `--squash`, `--rebase` (`gh pr merge <pr> --merge|--squash|--rebase`). Then `git fetch` and fast-forward the default branch (`git merge --ff-only`) so the merged changes (e.g., the map) are present locally, and advance the item. **This is the tick's unit.**
 
-**Advancing an item** after its PR merged (on the updated default branch):
+**Advancing an item** after its PR merged (always on the default branch fast-forwarded **after** the merge — never read the map from a stale checkout):
 - SDD → `done`.
 - ODD → read the map. If it has no `pending` outcomes → `done`. Otherwise, if at least one `pending` outcome has all dependencies `delivered`, **or** `refine_pending` is non-empty → `status: triaged` (GitHub: `agent:triaged`), keep `artifacts`. Otherwise (pending outcomes exist but none is eligible and no refine is pending) → `status: triaged` with `refine_pending: "no eligible outcome"`, so Step 2 runs a refine first.
 - **CI green, no `--auto-merge`** → leave `in-review`; a human merges and a later tick detects it. Not a unit.
-- **CI red** → checkout the item's branch and run [Failure handling](#failure-handling) for this unit; a fix is pushed as a **new commit** to the existing PR. **This is the tick's unit.**
+- **CI red** → checkout the item's branch and run [Failure handling](#failure-handling) for this unit; the fix is committed as a **new commit**, gate steps 1–3 are re-run, and only then pushed to the existing PR. **This is the tick's unit.**
 - **CI pending** → skip.
 
 If this step consumed the unit, go to [End of tick](#end-of-tick).
 
 ### Step 1b — Resume unblocked items
 
-Pick the first item a human unblocked (file: state `status: ready` with an existing `branch`; GitHub: `agent:unblocked`). **This is the tick's unit.**
+Bookkeeping first (not a unit): any file-source item with state `status: ready`, no `branch`, `method: ODD` and a map in `artifacts` is a resumed `needs-input` item → set `status: triaged` (keep `guidance`; Step 2 passes it to the refine) and continue.
 
-1. Check out its existing branch (fetch it from the remote if needed). Never re-triage, never re-run spec, plan or map creation.
+Then pick the first item a human unblocked (file: state `status: ready` with an existing `branch`; GitHub: `agent:unblocked`). **This is the tick's unit.**
+
+1. Check out its existing branch (fetch it from the remote if needed). Never re-triage. Spec, plan or map work runs only for `block_kind: refine | artifact`, as below.
 2. Set `status: in-progress`, `attempts: 0`.
-3. Run a **fix pass** (as in [Failure handling](#failure-handling) step 1) using the last failure report in the item's report, plus any guidance the human added there (file: report; GitHub: issue comments after the block).
+3. Read the human's guidance (file: state `guidance`; GitHub: issue comments after the block) and branch on `block_kind`:
+   - `code-test` (build/lint/test/quality-gate/CI failures) → a **fix pass** (as in [Failure handling](#failure-handling) step 1) using the last failure report plus the guidance.
+   - `refine` (`refine_pending` non-empty, e.g. a runway conflict) → invoke `agentic-odd-map <map path> --then none` (refine) with the guidance appended to its input, clear `refine_pending`, then the delivery skill (`agentic-odd-deliver <map path> --next`) and the rename rules of Step 2 item 5.
+   - `artifact` (the spec, plan, map or card itself blocked) → re-run **that** skill on the existing branch with the guidance as additional input: `agentic-spec` (then `agentic-implement` on its plan), `agentic-odd-map` (refine if the map exists, else create it in the recorded `artifacts` folder; then `agentic-odd-deliver --next`), or `agentic-odd-deliver <map path> --next` for a card-level block. This is the one sanctioned re-run, because a human changed the input.
+   If `block_kind` is missing (older state), infer it from the last failure report.
 4. Run the full [Quality gate](#quality-gate). On pass → push and mark the existing draft PR ready (`gh pr ready <pr>`) or open one; `status: in-review`. On failure → [Failure handling](#failure-handling) (this counts as the first failure).
 
 Go to [End of tick](#end-of-tick).
@@ -149,11 +157,11 @@ Go to [End of tick](#end-of-tick).
 
 Pick the first ODD item whose state is `triaged` with an existing map and whose previous outcome PR is merged (no stacked PRs: never start the next outcome while the previous outcome's PR is open).
 
-1. Create the working branch `agent/<id>-next` from the updated default branch. Set state `in-progress`, `branch`.
-2. **Refine first, if pending.** If `refine_pending` is non-empty, invoke `agentic-odd-map <map path> --then none` (refine mode). Wait for its Result. If `BLOCKED` → [Failure handling](#failure-handling) (a map-level block is not retried). Clear `refine_pending`. The refined map is part of this unit's commit and PR.
+1. Create the working branch `agent/<id>-next-<n>` from the updated default branch. Set state `in-progress`, `branch`.
+2. **Refine first, if pending.** If `refine_pending` or `guidance` is non-empty, invoke `agentic-odd-map <map path> --then none` (refine mode), appending `guidance` to its input; clear `guidance` afterwards. Wait for its Result. If `BLOCKED` → [Failure handling](#failure-handling) (a map-level block is not retried). Clear `refine_pending`. The refined map is part of this unit's commit and PR.
 3. **Eligibility.** If the map now has no `pending` outcome with all dependencies `delivered`:
-   - if the refine changed the map → rename the branch to `agent/<id>-refine`, commit the map change locally, skip gate steps 2–3 (map-only diff, no code), push, open a PR titled `docs(<id>): refine outcome map`, set `status: in-review`. Advancing it after merge re-evaluates eligibility.
-   - else → delete the empty working branch, set `status: needs-input` with reason "no eligible outcome — map refine needed" (GitHub: `agent:needs-input` + comment).
+   - if the refine changed the map → rename the branch to `agent/<id>-refine-<n>`, commit the map change locally, push (named exception to the gate — see [Git policy](#git-policy--scoped-exception); gate steps 1–3 are not applicable to a map-only diff), open a PR titled `docs(<id>): refine outcome map`, set `status: in-review`. Advancing it after merge re-evaluates eligibility.
+   - else → delete the empty working branch, set `branch: null` and `status: needs-input` with reason "no eligible outcome — map refine needed" (GitHub: `agent:needs-input` + comment).
    Go to [End of tick](#end-of-tick).
 4. Invoke the `agentic-odd-deliver` skill: `<map path> --next`. Wait for its Result block.
 5. Take the delivered outcome ID from the Result's `Outcomes delivered:` field (a split may deliver a sub-outcome, not the one predicted). Rename the branch to `agent/<id>-O-NN` and set `outcome: O-NN`. If the Result's `Map refine recommended:` field is not `none`, store it in `refine_pending`.
@@ -175,7 +183,7 @@ Take the first item of `eligible_items()`. If there is none, go to Step 4.
      3. Invoke `agentic-implement` with the plan folder from the spec Result, **directly** (not via `--then implement`), so you receive the full `## Agentic Implement Result` block.
      4. Record `artifacts` (spec + plan paths). Run the [Quality gate](#quality-gate). On pass → [Push and PR](#push-and-pr). One PR per SDD item.
    - **`ODD`** →
-     1. Working branch `agent/<id>-next` from the updated default branch; `status: in-progress`, `method: ODD`.
+     1. Working branch `agent/<id>-next-<n>` from the updated default branch; `status: in-progress`, `method: ODD`.
      2. Invoke `agentic-odd-map` with the item input file and `--out odd/<id>/ --then none`. Wait for its Result. If `BLOCKED` → [Failure handling](#failure-handling) (a map-level block is not retried). Take the map path from the Result's `Map:` field (the skill may choose a different folder) and record it in `artifacts`.
      3. Invoke `agentic-odd-deliver <map path> --next` **directly** (not via `--then deliver-next`), so you receive the full `## Agentic ODD Deliver Result` block. Map creation and the walking-skeleton outcome are one unit.
      4. As in Step 2 item 5: take the delivered outcome ID from `Outcomes delivered:`, rename the branch to `agent/<id>-O-NN`, set `outcome`, and store `Map refine recommended:` in `refine_pending` when not `none`.
@@ -232,12 +240,12 @@ A unit fails when the delivery skill returns `BLOCKED`/`PARTIAL`, a gate step 1�
    - A retry **never re-runs spec, plan, or map creation**. It is a **fix pass** on the unit's branch:
      - `code` failures (build/lint errors, quality-gate `code` items, review findings left open) → `implement-agent`, given the failure output / gate report as the step to fix, the governing artifacts and conventions, and the note that it runs unattended.
      - `test` failures (failing tests, quality-gate `test` items) → `test-agent`, given the failure output / gate report, with the note that it runs unattended.
-   - Commit the fix locally as a **new commit** on the unit's branch, then re-run the **full** quality gate (steps 1–3; step 1 is re-derived as described in [Quality gate](#quality-gate)). Increment `attempts`.
-   - For a red-CI failure, the fix is committed and pushed as a **new commit** on the existing PR branch; the next CI run is checked in a later tick, and a second red CI is the second failure.
+   - If the unit is already committed (step 3 or CI failed), commit the fix locally as a **new commit** `fix(<id>): …`; if it is not (step 1 or 2 failed), do **not** commit — the normal local commit with the `<type>(<id>)` message happens when steps 1–2 pass. Then re-run the **full** quality gate (steps 1–3; step 1 is re-derived as described in [Quality gate](#quality-gate)). Increment `attempts`.
+   - For a red-CI failure, the fix is committed as a **new commit** on the existing PR branch, gate steps 1–3 are re-run, and only after they pass it is pushed; the next CI run is checked in a later tick, and a second red CI is the second failure.
 2. **Second failure → blocked.**
    - Consult the advisor with an Escalation Brief (the unit, both failure reports, options: mark blocked / one targeted fix the brief spells out). If the advisor gives a concrete, minimal fix, apply it once and re-gate; if that fails too, or the advisor is unavailable, block.
    - Commit any remaining uncommitted work on the unit's branch (message prefixed `wip(<id>):`; skip if the tree is already clean because the unit was committed before step 3), push the branch, and open a **draft PR** (or `gh pr ready --undo` an existing one) whose body contains the failure reports.
-   - `set_state(id, status: blocked, report)`; GitHub: label `agent:blocked` + comment with the report.
+   - `set_state(id, status: blocked, block_kind, report)` — `block_kind`: `artifact` for a spec/plan/map/card-level block, `refine` when `refine_pending` is non-empty, else `code-test`; GitHub: label `agent:blocked` + comment with the report.
    - Increment `consecutive_blocked`.
 3. Return to the default branch and continue with [End of tick](#end-of-tick) — the next tick moves on to other items; a blocked item is skipped until a human unblocks it (see **Unblock** under [State and sources](#state-and-sources)).
 
@@ -295,11 +303,11 @@ Status rules:
 
 - **Never wait for human input.** Resolve through the rules, evidence, or the Advisor Consultation Protocol.
 - **One unit of work per tick.** Never start a second unit in the same tick.
-- **Never push or open a PR before quality-gate steps 1–3 pass** (except the `wip` push of a blocked unit, which goes to a draft PR). The local commit happens after steps 1–2, so step 3 can diff it.
+- **Never push or open a PR before quality-gate steps 1–3 pass** (except the `wip` push of a blocked unit, which goes to a draft PR, and the map-only refine PR of Step 2 item 3, where steps 1–3 are not applicable). The local commit happens after steps 1–2, so step 3 can diff it.
 - **Never merge without `--auto-merge` and green CI.** Never push to the default branch, never force-push, never rewrite pushed history.
 - Never stash, discard, or commit changes the loop did not make. A dirty tree stops the loop.
 - Never write the human-authored backlog file.
-- Never run spec, plan or map creation again as a retry or when resuming an unblocked item (a map **refine** requested by a delivery Result is not a retry).
+- Never run spec, plan or map creation again as a retry. The only re-runs are a map **refine** (requested by a delivery Result or a `refine` block) and resuming an `artifact` block after a human added guidance.
 - Never stack PRs: the next ODD outcome waits for the previous outcome's PR to merge.
 - Never trust a delivery skill's self-assessment — the gate re-runs the build/tests and the quality-gate-agent never sees the delivery conclusions.
 - Always start and end the tick on the default branch, and always end with the Result block.

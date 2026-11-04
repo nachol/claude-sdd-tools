@@ -18,8 +18,13 @@ Format
 This file is human-authored only. The loop never writes it. Loop state (triage verdict, method, branch,
 PR, status) lives in `.agentic-backlog/state.json` (excluded via `.git/info/exclude`) and reports in
 `.agentic-backlog/reports/`.
-To unblock an item, set its `status` in `state.json` to `ready` (keep its other fields): the loop resumes it
-on its existing branch with a fix pass — it never re-triages it or re-creates its spec, plan or map.
+To unblock a `blocked` item, set its `status` in `state.json` to `ready` (keep its other fields) and optionally
+write `guidance` (free text). The loop resumes it on its existing branch: a fix pass for code/test failures, a map
+refine for refine blocks, or a re-run of the blocked spec/map/card skill with your guidance — it never re-triages it.
+To resume a `needs-input` item:
+- ODD item with a map (no eligible outcome): fix the map or write `guidance`, then set `status` to `ready`; the loop
+  resumes it as an ODD item between outcomes (refine first).
+- Triage NEEDS_INPUT (no map yet): update the item in this file, then delete its `state.json` entry; it is re-triaged.
 To restart an item from scratch, delete its `agent/<id>*` branches (local and remote) and its `state.json` entry.
 -->
 
