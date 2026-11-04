@@ -443,4 +443,5 @@ Use `COMPLETE_WITH_ASSUMPTIONS` when there is at least one `self-decided` key de
 - Actively kill paths that don't hold up. Do not keep weak options alive to appear balanced.
 - The spec must be self-contained: another engineer or an AI planning agent (`plan-agent`) must be able to produce a concrete, correct, and complete implementation plan from it without asking clarifying questions.
 - Phase 4 always runs after Phase 3, and the Result block always ends the response.
+- **NEVER create git commits, push, or change branches.** The invoking agent or the user manages git.
 - The spec and all written artifacts are in English. Your status lines may follow the language of the invoking prompt.
