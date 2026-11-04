@@ -260,7 +260,7 @@ A unit fails when the delivery skill returns `BLOCKED`/`PARTIAL`, a gate step 1�
 
 ## Pacing
 
-Under `/loop` (dynamic mode), every tick — whatever its status — ends with **exactly one** `ScheduleWakeup` call: either a wakeup passing the same `/agentic-backlog <args>` as `prompt`, or `stop: true` (with every other field omitted):
+Under `/loop` (dynamic mode), every tick — whatever its status — ends with **exactly one** `ScheduleWakeup` call: either a wakeup passing as `prompt` the same command you were invoked with, verbatim (e.g. `/claude-sdd-tools:agentic-backlog <args>`), or `stop: true` (with every other field omitted):
 
 | Situation | Call |
 |-----------|------|
@@ -271,6 +271,8 @@ Under `/loop` (dynamic mode), every tick — whatever its status — ends with *
 | Source unreachable or state unreadable (`ERROR`) | `stop: true` — report the reason; no further wakeups until a human restarts the loop |
 
 When not running under `/loop`, do not call `ScheduleWakeup`; state the recommended next action in the Result.
+
+Under `/goal` (a session goal that keeps starting turns until an evaluator judges its condition met): run exactly **one tick per turn**, never several in one turn, and do not call `ScheduleWakeup`. The goal condition decides whether another tick starts, so the Result block must be printed every turn — the evaluator reads its `Status`. `WAITING` means only PRs awaiting CI or a human merge remain; back-to-back ticks cannot make progress on them, so report `WAITING` plainly (the recommended goal conditions end on it — see the README).
 
 ## Result
 

@@ -67,7 +67,7 @@ claude plugin install claude-sdd-tools@<your-marketplace>
 | [odd-deliver](#odd-deliver) | `/odd-deliver <map.md> [O-id]` | Deliver one outcome end to end: card → red → implement → green → review → docs → close |
 | [agentic-odd-map](#agentic-skills) | Agents, or `/agentic-odd-map <idea \| doc \| map.md> [--out <dir>] [--then none\|deliver-next\|deliver-all]` | Unattended outcome mapping (or refine) — decisions reviewed by the advisor |
 | [agentic-odd-deliver](#agentic-skills) | Agents, or `/agentic-odd-deliver <map.md> [O-id \| --next \| --all]` | Unattended outcome delivery — gates resolved with the advisor |
-| [agentic-backlog](#agentic-backlog) | `/loop /agentic-backlog [--source ...] [--auto-merge] [--max-blocked N]` | Consume a backlog: triage SDD/ODD, deliver, quality-gate, open one PR per unit |
+| [agentic-backlog](#agentic-backlog) | `/loop /agentic-backlog [...]`, `/goal ...`, or once (`claude -p`) | Consume a backlog: triage SDD/ODD, deliver, quality-gate, open one PR per unit |
 
 ### Agents
 
@@ -659,7 +659,7 @@ backlog ──→ │ triage-agent ─→ SDD: agentic-spec --then plan         
 
 **What it does:** Runs one **tick** of the loop: checks the preconditions, performs **at most one unit of work** (a whole SDD item, one ODD outcome, a map refine, a merge or a CI fix), persists state, returns to the default branch, schedules the next wakeup, and ends.
 
-**When to use it:** Under `/loop` with no interval, so it paces itself. It can also be invoked once, outside `/loop`, to run a single tick.
+**When to use it:** Under `/loop` with no interval, so it paces itself; under `/goal` for a bounded batch (one tick per turn, ending on a Result `Status`); or once — interactively or with `claude -p` from a scheduler — to run a single tick. See [Use Cases → Automatic orchestration](#4-automatic-orchestration-with-loop-or-goal).
 
 **Invocation:**
 
@@ -668,6 +668,7 @@ backlog ──→ │ triage-agent ─→ SDD: agentic-spec --then plan         
 /loop /agentic-backlog --source file:docs/backlog.md
 /loop /agentic-backlog --source github:agent-ready          # GitHub Issues with a label
 /loop /agentic-backlog --auto-merge --max-blocked 3
+/goal Run /agentic-backlog once per turn until a tick reports Status IDLE, WAITING, STOPPED or ERROR, or stop after 30 turns
 ```
 
 | Argument | Default | Meaning |
@@ -848,9 +849,22 @@ claude -p --advisor opus "Use the claude-sdd-tools:agentic-odd-deliver skill wit
 
 ---
 
-## End-to-End Examples
+## Use Cases
 
-### SDD
+The plugin can be driven at four levels of autonomy. Pick the lowest one that fits: every level keeps the same quality gates, and higher levels only remove the human from more decisions.
+
+| Level | Who decides | Commits | Typical use |
+|-------|-------------|---------|-------------|
+| [1. Manual (interactive)](#1-manual-interactive) | You, one question at a time | You | New or ambiguous work, design you want to own |
+| [2. Agentic (unattended skill)](#2-agentic-unattended-skills) | The skill + the advisor | You | Well-understood work, overnight runs, headless sessions |
+| [3. Orchestrated by your agents or skills](#3-orchestration-from-your-own-agents-or-skills) | Your orchestrator + the advisor | Your orchestrator | Custom pipelines, CI jobs, workflows |
+| [4. Automatic with `/loop` or `/goal`](#4-automatic-orchestration-with-loop-or-goal) | `agentic-backlog` + triage + quality gate | `agentic-backlog` (branch + PR) | Draining a backlog unattended |
+
+> **Skill names.** Plugin skills are namespaced: in the `/` menu they appear as `/claude-sdd-tools:<skill>` (for example `/claude-sdd-tools:agentic-backlog`). The examples below use the short form where it is unambiguous in your setup; use the namespaced form if it is not. The interactive skills (`spec`, `spec-input-check`, `implement`, `odd-map`, `odd-deliver`) can only be started by you, never by an agent, `/loop` or `/goal`.
+
+### 1. Manual (interactive)
+
+#### SDD — one closed contract, specified whole
 
 ```
 # 1. (Optional) Validate your input document
@@ -858,22 +872,20 @@ claude -p --advisor opus "Use the claude-sdd-tools:agentic-odd-deliver skill wit
 
 # 2. Run the specification process
 /spec Build a rate limiter for our public API with per-tenant limits
+# ... Phase 1 (problem) and Phase 2 (decisions): one question at a time, you decide ...
+# ... Phase 3 writes the spec; Phase 4: choose "Implementation Plan" → plan-agent writes it ...
+# ... spec offers to execute → you say yes ...
 
-# ... interactive Q&A through Phases 1-4 ...
-# ... spec chooses "Implementation Plan" → plan-agent generates the plan ...
-# ... spec offers to execute → user says yes ...
+# 3. Implementation runs:
+#    - Each step: implement-agent → test-agent
+#    - After all steps: review-agent → fixes → docs-agent → delivery checklist
+#    - You commit when ready
 
-# 3. Implementation runs automatically:
-#    - Each step: code → test-agent
-#    - After all steps: review-agent → docs-agent → delivery checklist
-#    - Final summary presented
-#    - User commits when ready
-
-# Or manually at any point:
-/implement ./implementation-plan
+# Or execute an existing plan at any point (optionally only some phases):
+/implement ./specs/per-tenant-rate-limiter/plan
 ```
 
-### ODD
+#### ODD — iterate in small, fully closed outcomes
 
 ```
 # 1. Frame the goal and slice it into outcomes
@@ -886,31 +898,156 @@ claude -p --advisor opus "Use the claude-sdd-tools:agentic-odd-deliver skill wit
 #    - Card (outcome-agent) → you approve it (Gate 1)
 #    - Acceptance tests written and seen failing (red)
 #    - Steps implemented → everything green → scoped review → docs
-#    - Delivery Record + map updated → backlog changes approved (Gate 2)
-#    - Commit the outcome (one commit per outcome)
+#    - Delivery Record + map updated → you approve backlog changes (Gate 2)
+#    - Commit the outcome (one commit per outcome — a commit message is suggested)
 
-# 3. Repeat for the next outcome; refine the map when learnings change the plan
-/odd-deliver ./odd/per-tenant-rate-limiting/map.md
-/odd-map ./odd/per-tenant-rate-limiting/map.md      # refine mode
+# 3. Repeat; pick a specific outcome, or refine the map when learnings change the plan
+/odd-deliver ./odd/per-tenant-rate-limiting/map.md O-03
+/odd-map ./odd/per-tenant-rate-limiting/map.md          # refine mode
 ```
 
-### Backlog loop
+#### Not sure which one?
+
+Ask Claude to route it before you start — `triage-agent` is read-only and only returns a verdict:
+
+```
+Use the triage-agent agent on this item: "Add CSV export of invoices to the billing page".
+```
+
+It answers `SDD`, `ODD`, `SPLIT` (with child items) or `NEEDS_INPUT` (with the questions to answer first), with its reasons. Then run the matching interactive skill.
+
+### 2. Agentic (unattended skills)
+
+The agentic skills run the same processes without asking you anything; decisions go through the [advisor](#requirements) and are recorded with their source. They **never commit** — you review the working tree and commit. Run them from an interactive session (`/claude-sdd-tools:agentic-spec ...`) or headless with `claude -p`.
+
+#### SDD
+
+```bash
+# Check the brief, then spec + plan + implement it
+claude -p --advisor opus "Use the claude-sdd-tools:agentic-spec-input-check skill on ./product-brief.md. \
+If it recommends run-agentic-spec, use claude-sdd-tools:agentic-spec with ./product-brief.md --then implement."
+
+# Spec only (review it before planning), then plan + implement later
+/claude-sdd-tools:agentic-spec ./product-brief.md --then none
+/claude-sdd-tools:agentic-spec ./product-brief.md --out ./specs/rate-limiter --then plan
+/claude-sdd-tools:agentic-implement ./specs/rate-limiter/plan --phases 1,2
+```
+
+Look at the `## Agentic Spec Result` / `## Agentic Implement Result` blocks: `COMPLETE_WITH_ASSUMPTIONS` lists the *Open Questions for the Requester*, and `self-decided` decisions are the ones to review first.
+
+#### ODD
+
+```bash
+# Map a goal and deliver the walking skeleton (O-01)
+claude -p --advisor opus "Use the claude-sdd-tools:agentic-odd-map skill with ./product-brief.md --then deliver-next."
+
+# Map only, review the backlog, then deliver outcome by outcome
+/claude-sdd-tools:agentic-odd-map ./product-brief.md --then none
+/claude-sdd-tools:agentic-odd-deliver ./odd/per-tenant-rate-limiting/map.md --next
+/claude-sdd-tools:agentic-odd-deliver ./odd/per-tenant-rate-limiting/map.md O-04
+
+# Deliver every remaining eligible outcome (each fully closed; stops at the first BLOCKED/PARTIAL)
+claude -p --advisor opus "Use the claude-sdd-tools:agentic-odd-deliver skill with ./odd/per-tenant-rate-limiting/map.md --all."
+
+# Refine the map after learnings (e.g. when a Result reports "Map refine recommended")
+/claude-sdd-tools:agentic-odd-map ./odd/per-tenant-rate-limiting/map.md --then none
+```
+
+A good rhythm for ODD without the backlog loop: run `--next`, read the `## Agentic ODD Deliver Result` (and its `Suggested commit message`), commit, repeat.
+
+#### Unattended permissions
+
+Unattended runs need tool calls to proceed without prompts. Use auto mode in an interactive session, or for `claude -p` pass an explicit allowlist (`--allowedTools`) or a permission mode (`--permission-mode`). Prefer an allowlist scoped to your build/test tools and `git`/`gh` over broad bypass modes.
+
+### 3. Orchestration from your own agents or skills
+
+Every agentic skill ends with a machine-readable Result block, and every agent ends with a fixed result block (`## Triage Result`, `## Outcome Agent Result`, `## Quality Gate Result`). That makes them building blocks for your own orchestrator — a custom skill, a subagent, a Claude Code workflow, or a CI job running `claude -p`.
+
+**Route, then deliver** — what `agentic-backlog` does, in your own skill:
+
+```markdown
+1. Launch the `claude-sdd-tools:triage-agent` agent with the work item. Parse `## Triage Result`.
+2. SDD → invoke the `claude-sdd-tools:agentic-spec` skill with `--then plan`, then
+   `claude-sdd-tools:agentic-implement` with the plan folder from its Result.
+   ODD → invoke `claude-sdd-tools:agentic-odd-map` with `--then none`, then
+   `claude-sdd-tools:agentic-odd-deliver <map> --next`.
+3. Fail the run if the delivery Result is BLOCKED or PARTIAL, has open review findings,
+   or its tests/acceptance are not green.
+```
+
+**Independent verification of any branch** — `quality-gate-agent` is read-only and does not trust the author's conclusions:
+
+```
+Commit the work locally, then use the quality-gate-agent agent with base main, head feature/invoices-export,
+the spec at ./specs/invoices-export/spec.md and the plan folder ./specs/invoices-export/plan.
+```
+
+It traces every criterion to a test that exercises it, audits test quality (failure paths, no tautologies, mocks only at external boundaries), checks the [defensive baseline](#defensive-programming-baseline) and contract fidelity, and returns `PASS`/`FAIL` per check with file:line evidence. Feed the FAIL items to `implement-agent` / `test-agent` and re-run it.
+
+**CI / cron, one tick at a time** — run the backlog loop's tick from a scheduler instead of a session (each run does at most one unit and exits):
+
+```bash
+claude -p --advisor opus --allowedTools "<your allowlist>" "/claude-sdd-tools:agentic-backlog --source github:agent-ready"
+```
+
+### 4. Automatic orchestration with `/loop` or `/goal`
+
+`agentic-backlog` consumes a backlog end to end: it triages each item, runs SDD or ODD, applies the quality gate, and opens one PR per unit (see [Backlog Loop](#backlog-loop) for the full algorithm and the git policy). Each invocation is one **tick** that does at most one unit of work, so something has to keep invoking it — Claude Code's [`/loop`](https://code.claude.com/docs/en/scheduled-tasks) or [`/goal`](https://code.claude.com/docs/en/goal).
+
+#### `/loop` — long-running, paced by the skill (recommended for backlogs)
 
 ```
 # 1. Write backlog.md at the repo root (see templates/backlog.md)
 
-# 2. Start the loop (dynamic pacing, human merges)
-/loop /agentic-backlog
+# 2. Start the loop with no interval: the skill paces itself
+/loop /claude-sdd-tools:agentic-backlog
 #    Each tick: one unit → triage → SDD or ODD delivery → quality gate → branch + PR
-#    You review and merge PRs; the next tick detects the merge and moves on
-#    (an ODD item's next outcome starts only after its previous PR is merged)
+#    After a unit it wakes up again in 1–2 minutes; while only PRs are waiting it sleeps ≥ 20 minutes
+#    You review and merge PRs; the next tick detects the merge and advances the item
+#    (an ODD item's next outcome starts only after its previous outcome's PR is merged)
+#    It stops by itself when nothing is left, after --max-blocked consecutive blocked units,
+#    or on a failed precondition (e.g. dirty working tree). Press Esc to stop it yourself.
 
-# 3. Unblock an item: set its status to "ready" in .agentic-backlog/state.json,
-#    optionally with "guidance"; the next tick resumes it on its existing branch
-
-# Or with GitHub Issues and auto-merge on green CI
-/loop /agentic-backlog --source github:agent-ready --auto-merge
+# GitHub Issues as the backlog, merge automatically when CI is green, stop after 2 blocked in a row
+/loop /claude-sdd-tools:agentic-backlog --source github:agent-ready --auto-merge --max-blocked 2
 ```
+
+Use the dynamic form (no interval). A fixed interval (`/loop 30m ...`) also works but wastes ticks while PRs wait and cannot be stopped with `Esc`.
+
+#### `/goal` — run until a condition is met
+
+`/goal` keeps starting turns until a small evaluator model judges the condition met (or impossible). It suits a bounded run that should end on a clear, visible result. Under `/goal`, `agentic-backlog` runs one tick per turn and prints its Result every turn, so the condition can read its `Status`:
+
+```
+# Drain the ready items in one sitting; end when only PRs awaiting review remain
+/goal Run /claude-sdd-tools:agentic-backlog once per turn until a tick's "Agentic Backlog Tick Result" shows Status IDLE, WAITING, STOPPED or ERROR, or stop after 30 turns
+
+# Deliver the rest of an ODD map outcome by outcome (you commit afterwards)
+/goal Run /claude-sdd-tools:agentic-odd-deliver ./odd/per-tenant-rate-limiting/map.md --next once per turn until its Result shows "Outcomes remaining: none" or Status BLOCKED or PARTIAL, or stop after 15 turns
+
+# Fix a branch until the independent quality gate passes
+/goal Use the quality-gate-agent agent on base main and head HEAD with the spec at ./specs/invoices-export/spec.md; fix every FAIL with implement-agent or test-agent and commit the fixes locally; repeat until the Quality Gate Result shows "Overall: PASS", or stop after 6 turns
+
+# Headless: same as the first example, to completion in one invocation
+claude -p --advisor opus "/goal Run /claude-sdd-tools:agentic-backlog once per turn until a tick reports Status IDLE, WAITING, STOPPED or ERROR, or stop after 30 turns"
+```
+
+Write conditions the evaluator can check from the conversation alone — it does not run commands or read files, so name a field of a Result block the skill prints. Always include a turn bound. `/goal` (no arguments) shows progress; `/goal clear` stops it.
+
+#### `/loop` or `/goal`?
+
+| | `/loop /claude-sdd-tools:agentic-backlog` | `/goal ...agentic-backlog...` |
+|---|---|---|
+| Ends when | The skill stops it (backlog empty, circuit breaker, precondition) or you press `Esc` | The condition is judged met/impossible, the turn bound is hit, or `/goal clear` |
+| Waiting on CI / human merges | Sleeps (≥ 20 min) and resumes on its own — fits `--auto-merge` | Cannot wait; end the goal on `WAITING` and start it again later |
+| Best for | Continuous, long-running backlog consumption across many PRs | A bounded batch: "process what is ready now", "finish this map", "make this branch pass" |
+| Headless (`claude -p`) | Self-paced loops are waited for until they end | Runs to completion in one invocation |
+
+#### Unblocking and resuming
+
+Blocked and needs-input items never restart from scratch. For the file source, edit the item's entry in `.agentic-backlog/state.json` (set `status: "ready"`, optionally add `"guidance"`); for GitHub, comment your guidance and set the `agent:unblocked` label. The next tick resumes the item on its existing branch. See [Unblocking and resuming items](#unblocking-and-resuming-items).
+
+---
 
 ## Plugin Structure
 
