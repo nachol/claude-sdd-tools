@@ -9,7 +9,7 @@ Both workflows share a [defensive programming baseline](references/defensive-pro
 
 ## Overview
 
-This plugin provides 5 interactive skills, 5 agentic (unattended) counterparts, an unattended backlog loop skill, and 8 agents. Both workflows ensure that every piece of code:
+This plugin provides 5 interactive skills, 5 agentic (unattended) counterparts, an unattended backlog loop skill, a read-only workflow status skill, and 8 agents. Both workflows ensure that every piece of code:
 
 - comes from a well-defined specification (a full spec, or an outcome card);
 - is implemented by following a concrete plan;
@@ -68,6 +68,7 @@ claude plugin install claude-sdd-tools@<your-marketplace>
 | [agentic-odd-map](#agentic-skills) | Agents, or `/agentic-odd-map <idea \| doc \| map.md> [--out <dir>] [--then none\|deliver-next\|deliver-all]` | Unattended outcome mapping (or refine) — decisions reviewed by the advisor |
 | [agentic-odd-deliver](#agentic-skills) | Agents, or `/agentic-odd-deliver <map.md> [O-id \| --next \| --all]` | Unattended outcome delivery — gates resolved with the advisor |
 | [agentic-backlog](#agentic-backlog) | `/loop /agentic-backlog [...]`, `/goal ...`, or once (`claude -p`) | Consume a backlog: triage SDD/ODD, deliver, quality-gate, open one PR per unit |
+| [workflow-status](#workflow-status) | `/workflow-status [--source ...] [--item <id>] [--out <file>]`, or agents | Read-only dashboard: backlog items, ODD maps, SDD specs, PRs/CI, what needs a human, inconsistencies |
 
 ### Agents
 
@@ -825,6 +826,7 @@ Each agentic skill ends its response with a **Result block** that the invoking a
 | `agentic-odd-map` | `## Agentic ODD Map Result` | `COMPLETE \| COMPLETE_WITH_ASSUMPTIONS \| BLOCKED` | Mode (new/refine), map path, outcome counts and next eligible outcome, decisions, open questions, chained delivery status |
 | `agentic-odd-deliver` | `## Agentic ODD Deliver Result` | `COMPLETE \| COMPLETE_WITH_DEVIATIONS \| PARTIAL \| BLOCKED` | Every field mandatory and evidence-bearing: outcomes delivered/remaining, acceptance green (with command and counts), red phase verified, tests, review findings, deviations, backlog changes, escalations, known issues, `Map refine recommended`, files changed, suggested commit message |
 | `agentic-backlog` | `## Agentic Backlog Tick Result` | `UNIT_DONE \| WAITING \| IDLE \| STOPPED \| ERROR` | See [agentic-backlog](#agentic-backlog) |
+| `workflow-status` | `## Workflow Status Result` | `OK \| PARTIAL \| ERROR` | Counts per area, loop health, PRs/CI, needs-human-attention list, inconsistencies, next action |
 
 `agentic-backlog` has no interactive counterpart: it orchestrates the agentic skills above (see [Backlog Loop](#backlog-loop)).
 
@@ -1043,9 +1045,56 @@ Write conditions the evaluator can check from the conversation alone — it does
 | Best for | Continuous, long-running backlog consumption across many PRs | A bounded batch: "process what is ready now", "finish this map", "make this branch pass" |
 | Headless (`claude -p`) | Self-paced loops are waited for until they end | Runs to completion in one invocation |
 
+#### Checking status
+
+At any time — while a loop runs, between `/goal` runs, or after manual work — ask for the project's status:
+
+```
+/claude-sdd-tools:workflow-status                       # whole project
+/claude-sdd-tools:workflow-status --item BL-004         # one backlog item in full detail
+/claude-sdd-tools:workflow-status --source github:agent-ready --out status.md
+```
+
+It is read-only and tells you first what needs you: blocked items (with the exact unblock action), needs-input questions, PRs waiting for review or with red CI, open questions in maps and specs, and inconsistencies between state, branches and PRs. Orchestrators can parse its `## Workflow Status Result` block, e.g. a `/goal` condition or a daily `claude -p` digest. See [workflow-status](#workflow-status).
+
 #### Unblocking and resuming
 
 Blocked and needs-input items never restart from scratch. For the file source, edit the item's entry in `.agentic-backlog/state.json` (set `status: "ready"`, optionally add `"guidance"`); for GitHub, comment your guidance and set the `agent:unblocked` label. The next tick resumes the item on its existing branch. See [Unblocking and resuming items](#unblocking-and-resuming-items).
+
+---
+
+## Workflow Status
+
+### workflow-status
+
+**What it does:** Builds a read-only status dashboard of the project in the current directory, across every workflow of this plugin: backlog loop items (file or GitHub source), ODD outcome maps and their cards, SDD specs and plans, `agent/*` branches, and their PRs and CI.
+
+**When to use it:** Whenever you need to know where things stand — while `agentic-backlog` runs, before unblocking items, at the start of the day, or from an orchestrator that decides what to run next. It can be invoked by you or by agents.
+
+**Invocation:**
+
+```
+/workflow-status
+/workflow-status --item BL-004
+/workflow-status --source github:agent-ready --out status.md
+```
+
+| Argument | Default | Meaning |
+|----------|---------|---------|
+| `--source file:<path>` \| `github:<label>` | `file:backlog.md` if it exists | Backlog source, same format as `agentic-backlog` |
+| `--item <id>` | all items | Full detail of one backlog item (state, triage, report, branch, PR, CI, artifacts) |
+| `--out <file>` | none | Also write the report to a file (the only write it ever does) |
+
+**Report sections:** Summary · **Needs human attention** (blocked items with the exact unblock action, needs-input questions, PRs awaiting review or with red CI, Open Questions for the Requester, `self-decided` decisions to review, inconsistencies) · Backlog table · ODD maps (delivered/in-progress/pending, next eligible outcome, refine pending) · SDD specs · Recommended next actions.
+
+**Inconsistency checks:** state vs PR (e.g. `in-review` but merged), orphan `agent/*` branches, outcomes `in-progress` with nobody working on them or `delivered` without a Delivery Record, dependencies on dropped outcomes, maps with no eligible outcome, circuit breaker close to tripping, dirty tree or default branch behind its remote (the loop's preconditions would fail), more than one `agent:*` label on an issue.
+
+**Responsibilities:**
+
+- Strictly read-only: never changes state, artifacts, branches, labels, issues or PRs, never fixes an inconsistency, never runs delivery skills. Uses only read-only `git`/`gh` commands and never fetches.
+- Every claim cites its source; values it cannot read directly are labeled. Outside the loop, SDD implementation progress is not persisted on disk, so it is reported as *loop*, *git* (a PR or branch references the spec) or *inferred* (share of the plan's files present) — never as "done" by inference.
+- Without an authenticated `gh`, PR and CI fields are marked "not checked" and the result is `PARTIAL`.
+- Ends with a `## Workflow Status Result` block for orchestrators.
 
 ---
 
@@ -1076,8 +1125,10 @@ claude-sdd-tools/
 │   │   └── SKILL.md           # Unattended outcome mapping skill
 │   ├── agentic-odd-deliver/
 │   │   └── SKILL.md           # Unattended outcome delivery skill
-│   └── agentic-backlog/
-│       └── SKILL.md           # Unattended backlog loop skill
+│   ├── agentic-backlog/
+│   │   └── SKILL.md           # Unattended backlog loop skill
+│   └── workflow-status/
+│       └── SKILL.md           # Read-only workflow status skill
 ├── agents/
 │   ├── plan-agent.md          # Planning agent
 │   ├── implement-agent.md     # Step implementation agent
